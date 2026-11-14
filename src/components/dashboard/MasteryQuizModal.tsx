@@ -220,10 +220,7 @@ export default function MasteryQuizModal({
     setSavingResult(true);
     try {
       if (aprobado) {
-        // Award XP +25 bonus for passing quiz
-        await addXP(25);
-
-        // Save evaluation log
+        // Save evaluation log (saveEvalResult automatically awards xp_cambio: +20 XP)
         await saveEvalResult(
           diaNumero,
           'ejercicio_diario',
@@ -240,7 +237,7 @@ export default function MasteryQuizModal({
             errores_criticos: [],
             temas_a_reforzar: [],
             solucion_optima_explicada: `Completado con éxito el Quiz de Verificación del Bloque: ${titulo}.`,
-            xp_cambio: 25,
+            xp_cambio: 20,
           }
         );
 

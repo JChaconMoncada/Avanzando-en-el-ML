@@ -1,9 +1,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Settings, Eye, EyeOff, X, Trash2, CheckCircle2, XCircle, Save } from 'lucide-react';
+import { Settings, Eye, EyeOff, X, Trash2, CheckCircle2, XCircle, Save, RotateCcw } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { isSupabaseConfigured, resetSupabaseClient } from '@/lib/supabase';
+import { isSupabaseConfigured, resetSupabaseClient, resetUserXP } from '@/lib/supabase';
 import { isGeminiConfigured, resetGeminiClient } from '@/lib/gemini';
 
 interface ConfigState {
@@ -255,6 +255,19 @@ export default function ConfigModal() {
                       )}
                     </button>
                   </div>
+                  <p className="mt-1.5 text-xs text-slate-400 leading-relaxed">
+                    Modelo activo: <span className="text-cyan-400 font-mono font-medium">gemini-3.8-flash</span>.<br />
+                    Las claves deben comenzar con <span className="text-amber-400 font-mono">AIzaSy...</span> (obtenla gratis en{' '}
+                    <a
+                      href="https://aistudio.google.com/app/apikey"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-cyan-400 underline hover:text-cyan-300"
+                    >
+                      Google AI Studio
+                    </a>
+                    ).
+                  </p>
                 </div>
               </div>
 
@@ -281,6 +294,19 @@ export default function ConfigModal() {
                       Guardar Configuración
                     </>
                   )}
+                </button>
+
+                {/* Reset XP Button */}
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await resetUserXP();
+                    window.location.reload();
+                  }}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs font-semibold text-amber-400 hover:bg-amber-500/20 transition-colors cursor-pointer"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Calibrar / Reiniciar EXP a 0
                 </button>
 
                 {/* Clear Data */}

@@ -22,9 +22,9 @@ import {
   Calendar,
   RotateCcw,
 } from 'lucide-react';
-import type { StudyDay, EstadoBloque } from '@/lib/types';
+import type { StudyDay, EstadoBloque, UserStats } from '@/lib/types';
 import { CURSOS_RESPALDO } from '@/lib/types';
-import { addXP, updateStudyDay, recalcProgress } from '@/lib/supabase';
+import { addXP, deductXP, getUserStats, syncUserXP, updateStudyDay, recalcProgress } from '@/lib/supabase';
 import { explicarTema, isGeminiConfigured } from '@/lib/gemini';
 import { isEnglishClassDay } from '@/lib/curriculum';
 import MasteryQuizModal from './MasteryQuizModal';
@@ -50,6 +50,7 @@ interface DayCardProps {
   day: StudyDay;
   onDayUpdate: (updatedDay: StudyDay) => void;
   onProgressUpdate?: (newProgress: number) => void;
+  onStatsUpdate?: (newStats: UserStats) => void;
 }
 
 interface RescuePanelProps {
@@ -396,9 +397,10 @@ interface BlockRowProps {
   isProcessing: boolean;
   onEntendi: () => void;
   onNoEntendi: () => void;
+  onResetBlock: () => void;
 }
 
-function BlockRow({ block, day, isProcessing, onEntendi, onNoEntendi }: BlockRowProps) {
+function BlockRow({ block, day, isProcessing, onEntendi, onNoEntendi, onResetBlock }: BlockRowProps) {
   const titulo = day[block.tituloField] as string | null;
   const desc = block.descField ? (day[block.descField] as string | null) : null;
   const estado = day[block.estadoField] as EstadoBloque;
@@ -473,9 +475,18 @@ function BlockRow({ block, day, isProcessing, onEntendi, onNoEntendi }: BlockRow
               <button
                 onClick={onEntendi}
                 title="Rendir nuevo quiz de comprobación con IA"
-                className="flex items-center gap-1 text-[11px] text-cyan-400 hover:text-cyan-300 px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-cyan-500/30 transition-colors"
+                className="flex items-center gap-1 text-[11px] text-cyan-400 hover:text-cyan-300 px-2.5 py-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-cyan-500/30 transition-colors cursor-pointer"
               >
                 Quiz IA
+              </button>
+              <button
+                onClick={onResetBlock}
+                disabled={isProcessing}
+                title="Reiniciar este bloque a estado pendiente y descontar la EXP ganada"
+                className="flex items-center gap-1 text-[11px] text-slate-400 hover:text-amber-400 px-2.5 py-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-amber-500/30 transition-colors cursor-pointer disabled:opacity-40"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Reiniciar</span>
               </button>
             </div>
           ) : (
@@ -494,6 +505,15 @@ function BlockRow({ block, day, isProcessing, onEntendi, onNoEntendi }: BlockRow
                 <Check className="h-3.5 w-3.5" />
                 Rendir Quiz
               </button>
+              <button
+                onClick={onResetBlock}
+                disabled={isProcessing}
+                title="Reiniciar este bloque a estado pendiente"
+                className="flex items-center gap-1 text-[11px] text-slate-400 hover:text-amber-400 px-2.5 py-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-amber-500/30 transition-colors cursor-pointer disabled:opacity-40"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Reiniciar</span>
+              </button>
             </div>
           )}
         </div>
@@ -506,7 +526,7 @@ function BlockRow({ block, day, isProcessing, onEntendi, onNoEntendi }: BlockRow
 // Main DayCard Component
 // ============================================================
 
-export default function DayCard({ day, onDayUpdate, onProgressUpdate }: DayCardProps) {
+export default function DayCard({ day, onDayUpdate, onProgressUpdate, onStatsUpdate }: DayCardProps) {
   const [processingBlock, setProcessingBlock] = useState<string | null>(null);
   const [rescuePanel, setRescuePanel] = useState<{
     isOpen: boolean;
@@ -593,6 +613,7 @@ export default function DayCard({ day, onDayUpdate, onProgressUpdate }: DayCardP
 
       await updateStudyDay(day.dia_numero, updates);
       const newProgress = await recalcProgress();
+      const updatedStats = await getUserStats();
 
       const updatedDay: StudyDay = {
         ...day,
@@ -603,12 +624,15 @@ export default function DayCard({ day, onDayUpdate, onProgressUpdate }: DayCardP
       if (onProgressUpdate) {
         onProgressUpdate(newProgress);
       }
+      if (onStatsUpdate && updatedStats) {
+        onStatsUpdate(updatedStats);
+      }
     } catch (err) {
       console.error('Error actualizando estado tras quiz:', err);
     } finally {
       setProcessingBlock(null);
     }
-  }, [quizModal, day, blocks, allEstados, onDayUpdate, onProgressUpdate]);
+  }, [quizModal, day, blocks, allEstados, onDayUpdate, onProgressUpdate, onStatsUpdate]);
 
   // Si reprueba el quiz (< 70%):
   const handleQuizFailed = useCallback(
@@ -672,6 +696,51 @@ export default function DayCard({ day, onDayUpdate, onProgressUpdate }: DayCardP
     [day, onDayUpdate]
   );
 
+  // Reiniciar un bloque específico a 'pendiente' y descontar los 20 XP si estaba entendido
+  const handleResetBlock = useCallback(
+    async (block: BlockInfo) => {
+      setProcessingBlock(block.key);
+      try {
+        const currentEstado = day[block.estadoField] as EstadoBloque;
+        const updates: Partial<StudyDay> = {
+          [block.estadoField]: 'pendiente' as EstadoBloque,
+        };
+
+        if (day.completado_dia) {
+          updates.completado_dia = false;
+        }
+
+        await updateStudyDay(day.dia_numero, updates);
+        const newProgress = await recalcProgress();
+
+        let updatedStats: UserStats | null = null;
+        if (currentEstado === 'entendido') {
+          updatedStats = await deductXP(20);
+        } else {
+          updatedStats = await getUserStats();
+        }
+
+        const updatedDay: StudyDay = {
+          ...day,
+          ...updates,
+        };
+        onDayUpdate(updatedDay);
+
+        if (onProgressUpdate) {
+          onProgressUpdate(newProgress);
+        }
+        if (onStatsUpdate && updatedStats) {
+          onStatsUpdate(updatedStats);
+        }
+      } catch (err) {
+        console.error('Error al reiniciar bloque individual:', err);
+      } finally {
+        setProcessingBlock(null);
+      }
+    },
+    [day, onDayUpdate, onProgressUpdate, onStatsUpdate]
+  );
+
   // Save notes
   const handleSaveNotes = useCallback(async () => {
     setIsSavingNotes(true);
@@ -687,8 +756,18 @@ export default function DayCard({ day, onDayUpdate, onProgressUpdate }: DayCardP
     }
   }, [day, notes, onDayUpdate]);
 
-  // Reiniciar todos los bloques del día a 'pendiente' para poder probar el quiz
+  // Reiniciar todos los bloques del día a 'pendiente' y descontar los XP correspondientes
   const handleResetDia = useCallback(async () => {
+    const blocksInThisDay = [
+      day.ing_b1_estado,
+      day.ing_b2_estado,
+      day.ing_b3_estado,
+      day.ml_parte1_estado,
+      day.ml_parte2_estado,
+      day.slb_estado,
+    ];
+    const understoodCount = blocksInThisDay.filter((s) => s === 'entendido').length;
+
     const updates: Partial<StudyDay> = {
       ing_b1_estado: 'pendiente',
       ing_b2_estado: 'pendiente',
@@ -700,12 +779,24 @@ export default function DayCard({ day, onDayUpdate, onProgressUpdate }: DayCardP
     };
     await updateStudyDay(day.dia_numero, updates);
     const newProgress = await recalcProgress();
+
+    let updatedStats: UserStats | null = null;
+    if (understoodCount > 0) {
+      updatedStats = await deductXP(understoodCount * 20);
+    } else {
+      updatedStats = await syncUserXP();
+    }
+
     const updatedDay: StudyDay = { ...day, ...updates };
     onDayUpdate(updatedDay);
+
     if (onProgressUpdate) {
       onProgressUpdate(newProgress);
     }
-  }, [day, onDayUpdate, onProgressUpdate]);
+    if (onStatsUpdate && updatedStats) {
+      onStatsUpdate(updatedStats);
+    }
+  }, [day, onDayUpdate, onProgressUpdate, onStatsUpdate]);
 
   // Format date for display
   const formattedDate = (() => {
@@ -860,6 +951,7 @@ export default function DayCard({ day, onDayUpdate, onProgressUpdate }: DayCardP
                   isProcessing={processingBlock === block.key}
                   onEntendi={() => handleEntendi(block)}
                   onNoEntendi={() => handleNoEntendi(block)}
+                  onResetBlock={() => handleResetBlock(block)}
                 />
               ))}
             </div>
@@ -882,6 +974,7 @@ export default function DayCard({ day, onDayUpdate, onProgressUpdate }: DayCardP
                   isProcessing={processingBlock === block.key}
                   onEntendi={() => handleEntendi(block)}
                   onNoEntendi={() => handleNoEntendi(block)}
+                  onResetBlock={() => handleResetBlock(block)}
                 />
               ))}
             </div>
@@ -904,6 +997,7 @@ export default function DayCard({ day, onDayUpdate, onProgressUpdate }: DayCardP
                   isProcessing={processingBlock === block.key}
                   onEntendi={() => handleEntendi(block)}
                   onNoEntendi={() => handleNoEntendi(block)}
+                  onResetBlock={() => handleResetBlock(block)}
                 />
               ))}
             </div>

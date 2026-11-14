@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import type { UserStats, StudyDay } from '@/lib/types';
 import { RANGOS } from '@/lib/types';
-import { getUserStats, updateUserStats, getStudyDays } from '@/lib/supabase';
+import { getUserStats, updateUserStats, getStudyDays, syncUserXP } from '@/lib/supabase';
 import { generarMensajeMotivador, isGeminiConfigured } from '@/lib/gemini';
 import { getEnglishClassAlerts } from '@/lib/curriculum';
 
@@ -46,6 +46,7 @@ function getRangoColor(xp: number): string {
 export default function ProgressHeader({ stats, studyDays, onStatsUpdate }: ProgressHeaderProps) {
   const [iaMessage, setIaMessage] = useState<string | null>(stats?.ultimo_mensaje_ia ?? null);
   const [isLoadingMessage, setIsLoadingMessage] = useState(false);
+  const [isSyncingXP, setIsSyncingXP] = useState(false);
   const [englishAlerts, setEnglishAlerts] = useState<
     { dia: StudyDay; horario: string; hoursUntil: number }[]
   >([]);
@@ -89,6 +90,18 @@ export default function ProgressHeader({ stats, studyDays, onStatsUpdate }: Prog
 
     requestAnimationFrame(animate);
   }, [progreso]);
+
+  const handleSyncXP = async () => {
+    setIsSyncingXP(true);
+    try {
+      const synced = await syncUserXP();
+      if (onStatsUpdate) onStatsUpdate(synced);
+    } catch (err) {
+      console.error('Error sincronizando XP:', err);
+    } finally {
+      setIsSyncingXP(false);
+    }
+  };
 
   // English class alerts
   useEffect(() => {
@@ -209,13 +222,21 @@ export default function ProgressHeader({ stats, studyDays, onStatsUpdate }: Prog
             <div className="flex flex-wrap items-center gap-2">
               {/* XP Badge */}
               <motion.div
-                whileHover={{ scale: 1.05 }}
-                className="flex items-center gap-1.5 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-1.5"
+                whileHover={{ scale: 1.03 }}
+                className="flex items-center gap-2 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-1.5"
               >
                 <Zap className="h-4 w-4 text-cyan-400" />
                 <span className="text-sm font-bold text-cyan-300">
                   {xp.toLocaleString()} XP
                 </span>
+                <button
+                  onClick={handleSyncXP}
+                  disabled={isSyncingXP}
+                  title="Sincronizar XP con los temas realmente dominados"
+                  className="p-1 hover:bg-cyan-500/20 rounded text-cyan-400/80 hover:text-cyan-300 transition-colors cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingXP ? 'animate-spin' : ''}`} />
+                </button>
               </motion.div>
 
               {/* Streak Badge */}

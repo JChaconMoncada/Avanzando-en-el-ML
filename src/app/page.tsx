@@ -6,6 +6,8 @@ import {
   getStudyDays,
   seedStudyDays,
   recalcProgress,
+  resetUserXP,
+  syncUserXP,
 } from '@/lib/supabase';
 import { generateAllStudyDays, getCurrentDayNumber } from '@/lib/curriculum';
 import type { UserStats, StudyDay } from '@/lib/types';
@@ -44,6 +46,24 @@ export default function DashboardPage() {
         const generated = generateAllStudyDays();
         await seedStudyDays(generated);
         days = generated;
+      }
+
+      // Auto-reconcile desynchronized XP if all days are reset
+      let understoodBlocksCount = 0;
+      for (const d of days) {
+        const b = [
+          d.ing_b1_estado,
+          d.ing_b2_estado,
+          d.ing_b3_estado,
+          d.ml_parte1_estado,
+          d.ml_parte2_estado,
+          d.slb_estado,
+        ];
+        understoodBlocksCount += b.filter((s) => s === 'entendido').length;
+      }
+
+      if (understoodBlocksCount === 0 && user && user.xp_total > 0) {
+        user = await resetUserXP();
       }
 
       setStudyDays(days);
@@ -245,6 +265,7 @@ export default function DashboardPage() {
           day={currentDay}
           onDayUpdate={handleDayUpdate}
           onProgressUpdate={handleProgressUpdate}
+          onStatsUpdate={handleStatsUpdate}
         />
       )}
     </div>

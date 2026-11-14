@@ -80,6 +80,71 @@ export async function addXP(amount: number): Promise<UserStats> {
   return { ...current, ...updates };
 }
 
+export async function deductXP(amount: number): Promise<UserStats> {
+  const stats = await getUserStats();
+  const current = stats || getDefaultUserStats();
+  const newXP = Math.max(0, current.xp_total - amount);
+  const rango = RANGOS.find(r => newXP >= r.min && newXP <= r.max) || RANGOS[0];
+  const updates: Partial<UserStats> = {
+    xp_total: newXP,
+    rango_actual: `${rango.emoji} ${rango.nombre}`,
+  };
+  await updateUserStats(updates);
+  return { ...current, ...updates };
+}
+
+export async function resetUserXP(): Promise<UserStats> {
+  const stats = await getUserStats();
+  const current = stats || getDefaultUserStats();
+  const rango = RANGOS[0];
+  const updates: Partial<UserStats> = {
+    xp_total: 0,
+    rango_actual: `${rango.emoji} ${rango.nombre}`,
+  };
+  await updateUserStats(updates);
+  return { ...current, ...updates };
+}
+
+export async function syncUserXP(): Promise<UserStats> {
+  const days = await getStudyDays();
+  const evals = await getEvaluaciones(999);
+
+  let completedBlocks = 0;
+  for (const d of days) {
+    const states = [
+      d.ing_b1_estado,
+      d.ing_b2_estado,
+      d.ing_b3_estado,
+      d.ml_parte1_estado,
+      d.ml_parte2_estado,
+      d.slb_estado,
+    ];
+    completedBlocks += states.filter((s) => s === 'entendido').length;
+  }
+
+  // Si todos los bloques están pendientes y no hay evaluaciones reales aprobadas
+  if (completedBlocks === 0 && evals.length === 0) {
+    return await resetUserXP();
+  }
+
+  let calculatedXP = completedBlocks * 20;
+  for (const ev of evals) {
+    if (ev.xp_cambio && ev.tipo_evaluacion !== 'ejercicio_diario') {
+      calculatedXP += ev.xp_cambio;
+    }
+  }
+
+  const finalXP = Math.max(0, calculatedXP);
+  const rango = RANGOS.find((r) => finalXP >= r.min && finalXP <= r.max) || RANGOS[0];
+  const updates: Partial<UserStats> = {
+    xp_total: finalXP,
+    rango_actual: `${rango.emoji} ${rango.nombre}`,
+  };
+  await updateUserStats(updates);
+  const current = (await getUserStats()) || getDefaultUserStats();
+  return { ...current, ...updates };
+}
+
 export async function updateSkill(skill: string, delta: number): Promise<void> {
   const stats = await getUserStats();
   if (!stats) return;
