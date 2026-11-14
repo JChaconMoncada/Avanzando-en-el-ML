@@ -26,6 +26,7 @@ import { CURSOS_RESPALDO } from '@/lib/types';
 import { addXP, updateStudyDay, recalcProgress } from '@/lib/supabase';
 import { explicarTema, isGeminiConfigured } from '@/lib/gemini';
 import { isEnglishClassDay } from '@/lib/curriculum';
+import MasteryQuizModal from './MasteryQuizModal';
 
 // ============================================================
 // Types
@@ -463,18 +464,36 @@ function BlockRow({ block, day, isProcessing, onEntendi, onNoEntendi }: BlockRow
               </button>
             </>
           ) : estado === 'entendido' ? (
-            <div className="flex items-center gap-1.5 rounded-lg bg-emerald-500/10 px-3 py-2 ring-1 ring-emerald-500/20">
-              <Check className="h-4 w-4 text-emerald-400" />
-              <span className="text-xs font-semibold text-emerald-400">Dominado</span>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 rounded-lg bg-emerald-500/10 px-3 py-2 ring-1 ring-emerald-500/20">
+                <Check className="h-4 w-4 text-emerald-400" />
+                <span className="text-xs font-semibold text-emerald-400">Dominado</span>
+              </div>
+              <button
+                onClick={onEntendi}
+                title="Rendir nuevo quiz de comprobación con IA"
+                className="flex items-center gap-1 text-[11px] text-cyan-400 hover:text-cyan-300 px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-cyan-500/30 transition-colors"
+              >
+                Quiz IA
+              </button>
             </div>
           ) : (
-            <button
-              onClick={onNoEntendi}
-              className="flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-400 transition-all hover:bg-amber-500/20"
-            >
-              <Lightbulb className="h-3.5 w-3.5" />
-              Ver explicación
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={onNoEntendi}
+                className="flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-400 transition-all hover:bg-amber-500/20"
+              >
+                <Lightbulb className="h-3.5 w-3.5" />
+                Explicación
+              </button>
+              <button
+                onClick={onEntendi}
+                className="flex items-center gap-1.5 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-xs font-semibold text-cyan-400 transition-all hover:bg-cyan-500/20"
+              >
+                <Check className="h-3.5 w-3.5" />
+                Rendir Quiz
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -499,6 +518,21 @@ export default function DayCard({ day, onDayUpdate, onProgressUpdate }: DayCardP
     categoria: '',
     descripcion: null,
   });
+
+  const [quizModal, setQuizModal] = useState<{
+    isOpen: boolean;
+    block: BlockInfo | null;
+    titulo: string;
+    descripcion?: string | null;
+    categoria: string;
+  }>({
+    isOpen: false,
+    block: null,
+    titulo: '',
+    descripcion: null,
+    categoria: '',
+  });
+
   const [notesExpanded, setNotesExpanded] = useState(false);
   const [notes, setNotes] = useState(day.notas_dia ?? '');
   const [isSavingNotes, setIsSavingNotes] = useState(false);
@@ -521,51 +555,91 @@ export default function DayCard({ day, onDayUpdate, onProgressUpdate }: DayCardP
   const pendingCount = allEstados.filter((e) => e === 'pendiente').length;
   const isComplete = completedCount === 6;
 
-  // Handle "Entendí" click
+  // Handle "Entendí" click -> Abre Quiz de Verificación de Dominio (10 a 20 preguntas)
   const handleEntendi = useCallback(
-    async (block: BlockInfo) => {
-      setProcessingBlock(block.key);
+    (block: BlockInfo) => {
+      const titulo = (day[block.tituloField] as string | null) || block.label;
+      const desc = block.descField ? (day[block.descField] as string | null) : null;
+      setQuizModal({
+        isOpen: true,
+        block,
+        titulo,
+        descripcion: desc,
+        categoria: block.categoria,
+      });
+    },
+    [day]
+  );
+
+  // Cuando supera el quiz con >= 70%:
+  const handleQuizPassed = useCallback(async () => {
+    if (!quizModal.block) return;
+    const block = quizModal.block;
+    setProcessingBlock(block.key);
+    try {
+      const updates: Partial<StudyDay> = {
+        [block.estadoField]: 'entendido' as EstadoBloque,
+      };
+
+      const newEstados = [...allEstados];
+      const blockIdx = blocks.findIndex((b) => b.key === block.key);
+      if (blockIdx >= 0) newEstados[blockIdx] = 'entendido';
+      const willBeComplete = newEstados.every((e) => e === 'entendido');
+
+      if (willBeComplete) {
+        updates.completado_dia = true;
+      }
+
+      await updateStudyDay(day.dia_numero, updates);
+      const newProgress = await recalcProgress();
+
+      const updatedDay: StudyDay = {
+        ...day,
+        ...updates,
+      };
+      onDayUpdate(updatedDay);
+
+      if (onProgressUpdate) {
+        onProgressUpdate(newProgress);
+      }
+    } catch (err) {
+      console.error('Error actualizando estado tras quiz:', err);
+    } finally {
+      setProcessingBlock(null);
+    }
+  }, [quizModal, day, blocks, allEstados, onDayUpdate, onProgressUpdate]);
+
+  // Si reprueba el quiz (< 70%):
+  const handleQuizFailed = useCallback(
+    async (temasFallo: string[]) => {
+      if (!quizModal.block) return;
+      const block = quizModal.block;
       try {
-        // 1. Add XP
-        await addXP(15);
-
-        // 2. Update the block estado
         const updates: Partial<StudyDay> = {
-          [block.estadoField]: 'entendido' as EstadoBloque,
+          [block.estadoField]: 'no_entendido' as EstadoBloque,
         };
-
-        // Check if all blocks will be complete after this
-        const newEstados = [...allEstados];
-        const blockIdx = blocks.findIndex((b) => b.key === block.key);
-        if (blockIdx >= 0) newEstados[blockIdx] = 'entendido';
-        const willBeComplete = newEstados.every((e) => e === 'entendido');
-
-        if (willBeComplete) {
-          updates.completado_dia = true;
-        }
-
         await updateStudyDay(day.dia_numero, updates);
 
-        // 3. Recalculate progress
-        const newProgress = await recalcProgress();
-
-        // 4. Notify parent
         const updatedDay: StudyDay = {
           ...day,
           ...updates,
         };
         onDayUpdate(updatedDay);
 
-        if (onProgressUpdate) {
-          onProgressUpdate(newProgress);
-        }
+        // Abrir panel de rescate para estudiar las opciones de respaldo
+        const titulo = (day[block.tituloField] as string | null) || block.label;
+        const desc = block.descField ? (day[block.descField] as string | null) : null;
+        setRescuePanel({
+          isOpen: true,
+          tema: titulo,
+          categoria: block.categoria,
+          descripcion: `${desc || ''}\n\n[PUNTOS FALLADOS EN EL QUIZ]:\n${temasFallo.slice(0, 3).join('\n')}`,
+        });
       } catch (err) {
-        console.error('Error processing Entendí:', err);
-      } finally {
-        setProcessingBlock(null);
+        console.error('Error procesando fallo de quiz:', err);
       }
     },
-    [day, blocks, allEstados, onDayUpdate, onProgressUpdate]
+    [quizModal, day, onDayUpdate]
   );
 
   // Handle "No Entendí" click
@@ -887,6 +961,19 @@ export default function DayCard({ day, onDayUpdate, onProgressUpdate }: DayCardP
         tema={rescuePanel.tema}
         categoria={rescuePanel.categoria}
         descripcion={rescuePanel.descripcion}
+      />
+
+      {/* Quiz de Verificación de Dominio con IA (10 a 20 preguntas) */}
+      <MasteryQuizModal
+        isOpen={quizModal.isOpen}
+        onClose={() => setQuizModal((prev) => ({ ...prev, isOpen: false }))}
+        diaNumero={day.dia_numero}
+        blockKey={quizModal.block?.key || ''}
+        titulo={quizModal.titulo}
+        descripcion={quizModal.descripcion}
+        categoria={quizModal.categoria}
+        onQuizPassed={handleQuizPassed}
+        onQuizFailed={handleQuizFailed}
       />
     </>
   );

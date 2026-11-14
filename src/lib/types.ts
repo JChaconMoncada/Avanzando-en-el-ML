@@ -80,6 +80,28 @@ export interface DeudaTecnica {
   created_at: string;
 }
 
+export interface QuizPregunta {
+  id: number;
+  pregunta: string;
+  opciones: string[];
+  respuesta_correcta: number; // 0, 1, 2, 3
+  explicacion: string;
+}
+
+export interface QuizResultado {
+  totalPreguntas: number;
+  correctas: number;
+  porcentaje: number;
+  aprobado: boolean;
+  detalles: {
+    pregunta: string;
+    seleccionada: number;
+    correcta: number;
+    esCorrecta: boolean;
+    explicacion: string;
+  }[];
+}
+
 export interface GeminiEvalResult {
   puntaje: number;
   veredicto: Veredicto;

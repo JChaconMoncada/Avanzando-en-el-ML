@@ -1,7 +1,7 @@
 'use client';
 
 import { GoogleGenerativeAI, GenerativeModel, Part } from '@google/generative-ai';
-import type { GeminiEvalResult, CategoriaEval, UserStats, DeudaTecnica } from './types';
+import type { GeminiEvalResult, CategoriaEval, UserStats, DeudaTecnica, QuizPregunta } from './types';
 import { CURSOS_RESPALDO } from './types';
 
 let genAI: GoogleGenerativeAI | null = null;
@@ -310,4 +310,77 @@ Responde como mentor técnico experto. Si pregunta algo de código, da ejemplos 
 
   const result = await m.generateContent(prompt);
   return result.response.text();
+}
+
+// ==================== GENERADOR DE QUIZ DE VERIFICACIÓN DE DOMINIO ====================
+
+export async function generarQuizDeDominio(
+  titulo: string,
+  descripcion: string | null | undefined,
+  categoria: string,
+  numPreguntas: number = 10
+): Promise<QuizPregunta[]> {
+  const m = getModel();
+  if (!m) throw new Error('Gemini no está configurado. Agrega tu API Key en Configuración.');
+
+  const n = Math.max(10, Math.min(20, numPreguntas));
+
+  const prompt = `Eres un Evaluador Técnico Senior de Schlumberger (SLB) y Lead Data/ML Engineer.
+Jesús Chacón afirma que ya domina el tema de este bloque de estudio.
+Tu misión es comprobar de manera rigurosa si realmente domina el tema mediante un Quiz Técnico de ${n} preguntas de opción múltiple (A, B, C, D).
+
+TEMA / TÍTULO DEL BLOQUE:
+${titulo}
+
+DESCRIPCIÓN DETALLADA DEL BLOQUE:
+${descripcion || 'Contenido técnico asociado al tema.'}
+
+CATEGORÍA: ${categoria}
+
+INSTRUCCIONES ESTRICTAS:
+1. Genera exactamente ${n} preguntas técnicas, variadas y con dificultad progresiva (básico, intermedio y avanzado).
+2. Preguntas basadas estrictamente en los conceptos, código, fórmulas, librerías, casos prácticos y metodologías mencionadas en el título y la descripción.
+3. Si es de Python/Pandas/SQL/ML: incluye preguntas con fragmentos de código, comportamiento de funciones, errores comunes y optimización.
+4. Si es de SLB: incluye preguntas con fórmulas reales (ID = OD - 2t, P = 0.052 * MW * TVD, T = W/N, Ley de Ohm, trenes de engranajes, SHL Verify numérico).
+5. Si es de Inglés: incluye preguntas de gramática, vocabulario técnico de ingeniería, tiempos verbales y comprensión de lectura.
+6. Cada pregunta DEBE tener exactamente 4 opciones de respuesta (índices 0, 1, 2, 3 correspondientes a A, B, C, D).
+7. Solo una opción debe ser la correcta. Indica el índice de la opción correcta en "respuesta_correcta" (número 0 a 3).
+8. Explica concisamente el porqué de la respuesta correcta.
+
+DEBES responder ÚNICAMENTE un JSON con esta estructura exacta, sin formato markdown extra:
+{
+  "preguntas": [
+    {
+      "id": 1,
+      "pregunta": "¿Texto de la pregunta...?",
+      "opciones": [
+        "A) Opción 1",
+        "B) Opción 2",
+        "C) Opción 3",
+        "D) Opción 4"
+      ],
+      "respuesta_correcta": 1,
+      "explicacion": "Explicación técnica de por qué la opción B es la correcta..."
+    }
+  ]
+}`;
+
+  const result = await m.generateContent(prompt);
+  const text = result.response.text();
+  const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+
+  try {
+    const parsed = JSON.parse(cleaned);
+    const list: QuizPregunta[] = Array.isArray(parsed) ? parsed : (parsed.preguntas || []);
+    return list.map((item, index) => ({
+      id: item.id || (index + 1),
+      pregunta: item.pregunta,
+      opciones: item.opciones,
+      respuesta_correcta: typeof item.respuesta_correcta === 'number' ? item.respuesta_correcta : 0,
+      explicacion: item.explicacion || 'Respuesta verificada por el evaluador técnico.'
+    }));
+  } catch (err) {
+    console.error('Error parseando quiz de Gemini:', err, 'Texto recibido:', text);
+    throw new Error('Error al generar las preguntas del quiz con Gemini. Intenta de nuevo.');
+  }
 }
