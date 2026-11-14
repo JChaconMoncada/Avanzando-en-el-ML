@@ -27,7 +27,6 @@ import { CURSOS_RESPALDO } from '@/lib/types';
 import { addXP, deductXP, getUserStats, syncUserXP, updateStudyDay, recalcProgress } from '@/lib/supabase';
 import { explicarTema, isGeminiConfigured } from '@/lib/gemini';
 import { isEnglishClassDay } from '@/lib/curriculum';
-import MasteryQuizModal from './MasteryQuizModal';
 
 // ============================================================
 // Types
@@ -473,13 +472,6 @@ function BlockRow({ block, day, isProcessing, onEntendi, onNoEntendi, onResetBlo
                 <span className="text-xs font-semibold text-emerald-400">Dominado</span>
               </div>
               <button
-                onClick={onEntendi}
-                title="Rendir nuevo quiz de comprobación con IA"
-                className="flex items-center gap-1 text-[11px] text-cyan-400 hover:text-cyan-300 px-2.5 py-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-cyan-500/30 transition-colors cursor-pointer"
-              >
-                Quiz IA
-              </button>
-              <button
                 onClick={onResetBlock}
                 disabled={isProcessing}
                 title="Reiniciar este bloque a estado pendiente y descontar la EXP ganada"
@@ -500,10 +492,15 @@ function BlockRow({ block, day, isProcessing, onEntendi, onNoEntendi, onResetBlo
               </button>
               <button
                 onClick={onEntendi}
-                className="flex items-center gap-1.5 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-xs font-semibold text-cyan-400 transition-all hover:bg-cyan-500/20"
+                disabled={isProcessing}
+                className="flex items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-400 transition-all hover:bg-emerald-500/20 hover:border-emerald-500/50"
               >
-                <Check className="h-3.5 w-3.5" />
-                Rendir Quiz
+                {isProcessing ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Check className="h-3.5 w-3.5" />
+                )}
+                Entendí
               </button>
               <button
                 onClick={onResetBlock}
@@ -540,20 +537,6 @@ export default function DayCard({ day, onDayUpdate, onProgressUpdate, onStatsUpd
     descripcion: null,
   });
 
-  const [quizModal, setQuizModal] = useState<{
-    isOpen: boolean;
-    block: BlockInfo | null;
-    titulo: string;
-    descripcion?: string | null;
-    categoria: string;
-  }>({
-    isOpen: false,
-    block: null,
-    titulo: '',
-    descripcion: null,
-    categoria: '',
-  });
-
   const [notesExpanded, setNotesExpanded] = useState(false);
   const [notes, setNotes] = useState(day.notas_dia ?? '');
   const [isSavingNotes, setIsSavingNotes] = useState(false);
@@ -576,74 +559,30 @@ export default function DayCard({ day, onDayUpdate, onProgressUpdate, onStatsUpd
   const pendingCount = allEstados.filter((e) => e === 'pendiente').length;
   const isComplete = completedCount === 6;
 
-  // Handle "Entendí" click -> Abre Quiz de Verificación de Dominio (10 a 20 preguntas)
+  // Handle "Entendí" click (directo, instantáneo sin esperas)
   const handleEntendi = useCallback(
-    (block: BlockInfo) => {
-      const titulo = (day[block.tituloField] as string | null) || block.label;
-      const desc = block.descField ? (day[block.descField] as string | null) : null;
-      setQuizModal({
-        isOpen: true,
-        block,
-        titulo,
-        descripcion: desc,
-        categoria: block.categoria,
-      });
-    },
-    [day]
-  );
-
-  // Cuando supera el quiz con >= 70%:
-  const handleQuizPassed = useCallback(async () => {
-    if (!quizModal.block) return;
-    const block = quizModal.block;
-    setProcessingBlock(block.key);
-    try {
-      const updates: Partial<StudyDay> = {
-        [block.estadoField]: 'entendido' as EstadoBloque,
-      };
-
-      const newEstados = [...allEstados];
-      const blockIdx = blocks.findIndex((b) => b.key === block.key);
-      if (blockIdx >= 0) newEstados[blockIdx] = 'entendido';
-      const willBeComplete = newEstados.every((e) => e === 'entendido');
-
-      if (willBeComplete) {
-        updates.completado_dia = true;
-      }
-
-      await updateStudyDay(day.dia_numero, updates);
-      const newProgress = await recalcProgress();
-      const updatedStats = await getUserStats();
-
-      const updatedDay: StudyDay = {
-        ...day,
-        ...updates,
-      };
-      onDayUpdate(updatedDay);
-
-      if (onProgressUpdate) {
-        onProgressUpdate(newProgress);
-      }
-      if (onStatsUpdate && updatedStats) {
-        onStatsUpdate(updatedStats);
-      }
-    } catch (err) {
-      console.error('Error actualizando estado tras quiz:', err);
-    } finally {
-      setProcessingBlock(null);
-    }
-  }, [quizModal, day, blocks, allEstados, onDayUpdate, onProgressUpdate, onStatsUpdate]);
-
-  // Si reprueba el quiz (< 70%):
-  const handleQuizFailed = useCallback(
-    async (temasFallo: string[]) => {
-      if (!quizModal.block) return;
-      const block = quizModal.block;
+    async (block: BlockInfo) => {
+      setProcessingBlock(block.key);
       try {
+        // 1. Add XP (+20)
+        const updatedStats = await addXP(20);
+
+        // 2. Update the block estado
         const updates: Partial<StudyDay> = {
-          [block.estadoField]: 'no_entendido' as EstadoBloque,
+          [block.estadoField]: 'entendido' as EstadoBloque,
         };
+
+        const newEstados = [...allEstados];
+        const blockIdx = blocks.findIndex((b) => b.key === block.key);
+        if (blockIdx >= 0) newEstados[blockIdx] = 'entendido';
+        const willBeComplete = newEstados.every((e) => e === 'entendido');
+
+        if (willBeComplete) {
+          updates.completado_dia = true;
+        }
+
         await updateStudyDay(day.dia_numero, updates);
+        const newProgress = await recalcProgress();
 
         const updatedDay: StudyDay = {
           ...day,
@@ -651,20 +590,19 @@ export default function DayCard({ day, onDayUpdate, onProgressUpdate, onStatsUpd
         };
         onDayUpdate(updatedDay);
 
-        // Abrir panel de rescate para estudiar las opciones de respaldo
-        const titulo = (day[block.tituloField] as string | null) || block.label;
-        const desc = block.descField ? (day[block.descField] as string | null) : null;
-        setRescuePanel({
-          isOpen: true,
-          tema: titulo,
-          categoria: block.categoria,
-          descripcion: `${desc || ''}\n\n[PUNTOS FALLADOS EN EL QUIZ]:\n${temasFallo.slice(0, 3).join('\n')}`,
-        });
+        if (onProgressUpdate) {
+          onProgressUpdate(newProgress);
+        }
+        if (onStatsUpdate && updatedStats) {
+          onStatsUpdate(updatedStats);
+        }
       } catch (err) {
-        console.error('Error procesando fallo de quiz:', err);
+        console.error('Error procesando Entendí:', err);
+      } finally {
+        setProcessingBlock(null);
       }
     },
-    [quizModal, day, onDayUpdate]
+    [day, blocks, allEstados, onDayUpdate, onProgressUpdate, onStatsUpdate]
   );
 
   // Handle "No Entendí" click
@@ -1087,19 +1025,6 @@ export default function DayCard({ day, onDayUpdate, onProgressUpdate, onStatsUpd
         tema={rescuePanel.tema}
         categoria={rescuePanel.categoria}
         descripcion={rescuePanel.descripcion}
-      />
-
-      {/* Quiz de Verificación de Dominio con IA (10 a 20 preguntas) */}
-      <MasteryQuizModal
-        isOpen={quizModal.isOpen}
-        onClose={() => setQuizModal((prev) => ({ ...prev, isOpen: false }))}
-        diaNumero={day.dia_numero}
-        blockKey={quizModal.block?.key || ''}
-        titulo={quizModal.titulo}
-        descripcion={quizModal.descripcion}
-        categoria={quizModal.categoria}
-        onQuizPassed={handleQuizPassed}
-        onQuizFailed={handleQuizFailed}
       />
     </>
   );
