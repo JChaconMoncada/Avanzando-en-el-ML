@@ -80,11 +80,16 @@ export interface DeudaTecnica {
   created_at: string;
 }
 
+export type QuizTipoPregunta = 'opcion_multiple' | 'escribir_codigo';
+
 export interface QuizPregunta {
   id: number;
+  tipo: QuizTipoPregunta;
   pregunta: string;
-  opciones: string[];
-  respuesta_correcta: number; // 0, 1, 2, 3
+  opciones?: string[]; // Para preguntas de selección
+  respuesta_correcta?: number; // Índice 0, 1, 2, 3
+  codigo_plantilla?: string; // Plantilla de código inicial para retos prácticos
+  solucion_esperada?: string; // Código de referencia o respuesta esperada
   explicacion: string;
 }
 

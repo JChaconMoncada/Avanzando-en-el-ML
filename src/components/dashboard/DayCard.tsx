@@ -20,6 +20,7 @@ import {
   Lightbulb,
   BookMarked,
   Calendar,
+  RotateCcw,
 } from 'lucide-react';
 import type { StudyDay, EstadoBloque } from '@/lib/types';
 import { CURSOS_RESPALDO } from '@/lib/types';
@@ -686,6 +687,26 @@ export default function DayCard({ day, onDayUpdate, onProgressUpdate }: DayCardP
     }
   }, [day, notes, onDayUpdate]);
 
+  // Reiniciar todos los bloques del día a 'pendiente' para poder probar el quiz
+  const handleResetDia = useCallback(async () => {
+    const updates: Partial<StudyDay> = {
+      ing_b1_estado: 'pendiente',
+      ing_b2_estado: 'pendiente',
+      ing_b3_estado: 'pendiente',
+      ml_parte1_estado: 'pendiente',
+      ml_parte2_estado: 'pendiente',
+      slb_estado: 'pendiente',
+      completado_dia: false,
+    };
+    await updateStudyDay(day.dia_numero, updates);
+    const newProgress = await recalcProgress();
+    const updatedDay: StudyDay = { ...day, ...updates };
+    onDayUpdate(updatedDay);
+    if (onProgressUpdate) {
+      onProgressUpdate(newProgress);
+    }
+  }, [day, onDayUpdate, onProgressUpdate]);
+
   // Format date for display
   const formattedDate = (() => {
     try {
@@ -744,6 +765,17 @@ export default function DayCard({ day, onDayUpdate, onProgressUpdate }: DayCardP
 
             {/* Stats row */}
             <div className="flex items-center gap-3">
+              {(completedCount > 0 || notUnderstoodCount > 0) && (
+                <button
+                  onClick={handleResetDia}
+                  title="Reiniciar todos los bloques de este día a pendiente para probar el quiz"
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-950 hover:bg-slate-900 border border-slate-800 hover:border-cyan-500/30 text-xs text-slate-400 hover:text-cyan-300 transition-colors cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Reiniciar Día</span>
+                </button>
+              )}
+
               {/* Block counters */}
               <div className="flex items-center gap-1.5">
                 {completedCount > 0 && (

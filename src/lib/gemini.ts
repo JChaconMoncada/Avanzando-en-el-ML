@@ -327,7 +327,7 @@ export async function generarQuizDeDominio(
 
   const prompt = `Eres un Evaluador Técnico Senior de Schlumberger (SLB) y Lead Data/ML Engineer.
 Jesús Chacón afirma que ya domina el tema de este bloque de estudio.
-Tu misión es comprobar de manera rigurosa si realmente domina el tema mediante un Quiz Técnico de ${n} preguntas de opción múltiple (A, B, C, D).
+Tu misión es comprobar de manera rigurosa si realmente domina el tema mediante un Quiz Técnico de ${n} preguntas combinando PREGUNTAS DE SELECCIÓN (opción múltiple) y RETOS PRÁCTICOS DE ESCRIBIR CÓDIGO/FÓRMULAS.
 
 TEMA / TÍTULO DEL BLOQUE:
 ${titulo}
@@ -338,21 +338,24 @@ ${descripcion || 'Contenido técnico asociado al tema.'}
 CATEGORÍA: ${categoria}
 
 INSTRUCCIONES ESTRICTAS:
-1. Genera exactamente ${n} preguntas técnicas, variadas y con dificultad progresiva (básico, intermedio y avanzado).
-2. Preguntas basadas estrictamente en los conceptos, código, fórmulas, librerías, casos prácticos y metodologías mencionadas en el título y la descripción.
-3. Si es de Python/Pandas/SQL/ML: incluye preguntas con fragmentos de código, comportamiento de funciones, errores comunes y optimización.
-4. Si es de SLB: incluye preguntas con fórmulas reales (ID = OD - 2t, P = 0.052 * MW * TVD, T = W/N, Ley de Ohm, trenes de engranajes, SHL Verify numérico).
-5. Si es de Inglés: incluye preguntas de gramática, vocabulario técnico de ingeniería, tiempos verbales y comprensión de lectura.
-6. Cada pregunta DEBE tener exactamente 4 opciones de respuesta (índices 0, 1, 2, 3 correspondientes a A, B, C, D).
-7. Solo una opción debe ser la correcta. Indica el índice de la opción correcta en "respuesta_correcta" (número 0 a 3).
-8. Explica concisamente el porqué de la respuesta correcta.
+1. Genera exactamente ${n} preguntas técnicas con dificultad progresiva (básica, intermedia y avanzada).
+2. COMBINACIÓN DE FORMATOS:
+   - Aproximadamente el 65%-70% deben ser de selección múltiple (tipo: "opcion_multiple") con 4 opciones (A, B, C, D).
+   - Aproximadamente el 30%-35% deben ser retos prácticos donde Jesús debe ESCRIBIR CÓDIGO o completar la fórmula (tipo: "escribir_codigo").
+3. Para retos de tipo "escribir_codigo":
+   - Pide escribir una línea o snippet corto (ej: cómo filtrar con .loc[], escribir una función en Python, escribir una query SQL con WHERE o JOIN, instanciar un modelo de sklearn, o calcular ID = OD - 2t).
+   - Incluye "codigo_plantilla" (plantilla base de código o función vacía) y "solucion_esperada" (código correcto).
+4. Para preguntas de tipo "opcion_multiple":
+   - Incluye "opciones" con 4 alternativas y "respuesta_correcta" con el índice (0, 1, 2, 3).
+5. Explica en "explicacion" la razón técnica de la solución.
 
 DEBES responder ÚNICAMENTE un JSON con esta estructura exacta, sin formato markdown extra:
 {
   "preguntas": [
     {
       "id": 1,
-      "pregunta": "¿Texto de la pregunta...?",
+      "tipo": "opcion_multiple",
+      "pregunta": "¿Texto de la pregunta teórica o de análisis de código...?",
       "opciones": [
         "A) Opción 1",
         "B) Opción 2",
@@ -360,7 +363,15 @@ DEBES responder ÚNICAMENTE un JSON con esta estructura exacta, sin formato mark
         "D) Opción 4"
       ],
       "respuesta_correcta": 1,
-      "explicacion": "Explicación técnica de por qué la opción B es la correcta..."
+      "explicacion": "Explicación técnica..."
+    },
+    {
+      "id": 2,
+      "tipo": "escribir_codigo",
+      "pregunta": "Escribe el código para...",
+      "codigo_plantilla": "# Escribe tu solución aquí\n",
+      "solucion_esperada": "codigo_correcto()",
+      "explicacion": "Explicación de la sintaxis y buenas prácticas..."
     }
   ]
 }`;
@@ -371,16 +382,64 @@ DEBES responder ÚNICAMENTE un JSON con esta estructura exacta, sin formato mark
 
   try {
     const parsed = JSON.parse(cleaned);
-    const list: QuizPregunta[] = Array.isArray(parsed) ? parsed : (parsed.preguntas || []);
-    return list.map((item, index) => ({
+    const list = Array.isArray(parsed) ? parsed : (parsed.preguntas || []);
+    return list.map((item: any, index: number) => ({
       id: item.id || (index + 1),
+      tipo: item.tipo === 'escribir_codigo' ? 'escribir_codigo' : 'opcion_multiple',
       pregunta: item.pregunta,
-      opciones: item.opciones,
+      opciones: Array.isArray(item.opciones) ? item.opciones : undefined,
       respuesta_correcta: typeof item.respuesta_correcta === 'number' ? item.respuesta_correcta : 0,
+      codigo_plantilla: item.codigo_plantilla || (item.tipo === 'escribir_codigo' ? '# Escribe tu solución aquí\n' : undefined),
+      solucion_esperada: item.solucion_esperada || '',
       explicacion: item.explicacion || 'Respuesta verificada por el evaluador técnico.'
     }));
   } catch (err) {
     console.error('Error parseando quiz de Gemini:', err, 'Texto recibido:', text);
     throw new Error('Error al generar las preguntas del quiz con Gemini. Intenta de nuevo.');
+  }
+}
+
+// ==================== VALIDAR CÓDIGO ESCRITO EN QUIZ ====================
+
+export async function validarCodigoSnippetQuiz(
+  pregunta: string,
+  codigoUsuario: string,
+  solucionEsperada?: string,
+  categoria?: string
+): Promise<{ esCorrecta: boolean; feedback: string }> {
+  const m = getModel();
+  if (!m) throw new Error('Gemini no está configurado.');
+
+  const prompt = `Eres un Evaluador Técnico de ${categoria || 'Programación y Ciencia de Datos'}.
+El estudiante Jesús Chacón escribió el siguiente código/respuesta para resolver este reto del Quiz:
+
+ENUNCIADO / RETO:
+${pregunta}
+
+${solucionEsperada ? `SOLUCIÓN ESPERADA DE REFERENCIA:\n${solucionEsperada}\n` : ''}
+
+CÓDIGO ENTREGADO POR JESÚS:
+${codigoUsuario}
+
+Evalúa si la solución de Jesús es correcta, funcional y resuelve el reto pedido.
+Sé flexible con nombres de variables o espaciado, pero estricto con la lógica, la sintaxis correcta y las fórmulas.
+
+Responde ÚNICAMENTE un JSON:
+{
+  "esCorrecta": true o false,
+  "feedback": "Explicación directa de si el código es correcto o qué error tiene y cómo se resuelve."
+}`;
+
+  const result = await m.generateContent(prompt);
+  const text = result.response.text();
+  const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    return {
+      esCorrecta: !text.toLowerCase().includes('incorrecto') && !text.toLowerCase().includes('error'),
+      feedback: text
+    };
   }
 }

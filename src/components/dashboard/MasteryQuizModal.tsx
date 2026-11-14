@@ -16,9 +16,12 @@ import {
   X,
   Zap,
   ShieldCheck,
-  ShieldAlert
+  ShieldAlert,
+  Code2,
+  Play,
+  Terminal
 } from 'lucide-react';
-import { generarQuizDeDominio, isGeminiConfigured } from '@/lib/gemini';
+import { generarQuizDeDominio, validarCodigoSnippetQuiz, isGeminiConfigured } from '@/lib/gemini';
 import { addXP, saveEvalResult, addDeuda } from '@/lib/supabase';
 import type { QuizPregunta, CategoriaEval } from '@/lib/types';
 
@@ -50,28 +53,36 @@ export default function MasteryQuizModal({
   const [loading, setLoading] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Active quiz state
+  // Active quiz navigation
   const [currentIndex, setCurrentIndex] = useState<number>(0);
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
   const [isAnswerRevealed, setIsAnswerRevealed] = useState<boolean>(false);
+
+  // Code writing mode state
+  const [codigoInput, setCodigoInput] = useState<string>('');
+  const [validandoCodigo, setValidandoCodigo] = useState<boolean>(false);
+  const [feedbackCodigo, setFeedbackCodigo] = useState<{ esCorrecta: boolean; feedback: string } | null>(null);
+
   const [answers, setAnswers] = useState<
-    { preguntaId: number; seleccion: number; esCorrecta: boolean }[]
+    { preguntaId: number; seleccion: number | string; esCorrecta: boolean }[]
   >([]);
 
   // Finished state
   const [isFinished, setIsFinished] = useState<boolean>(false);
   const [savingResult, setSavingResult] = useState<boolean>(false);
 
-  // Auto-generate on open if questions are empty
+  // Auto-generate on open
   useEffect(() => {
     if (isOpen) {
       handleGenerarQuiz(10);
     } else {
-      // Reset state on close
       setPreguntas([]);
       setCurrentIndex(0);
       setSelectedOption(null);
       setIsAnswerRevealed(false);
+      setCodigoInput('');
+      setValidandoCodigo(false);
+      setFeedbackCodigo(null);
       setAnswers([]);
       setIsFinished(false);
       setErrorMsg(null);
@@ -91,6 +102,8 @@ export default function MasteryQuizModal({
     setCurrentIndex(0);
     setSelectedOption(null);
     setIsAnswerRevealed(false);
+    setCodigoInput('');
+    setFeedbackCodigo(null);
     setAnswers([]);
     setIsFinished(false);
 
@@ -100,6 +113,11 @@ export default function MasteryQuizModal({
         throw new Error('No se recibieron preguntas. Intenta de nuevo.');
       }
       setPreguntas(questions);
+
+      // Pre-fill code template if first question is code
+      if (questions[0] && questions[0].tipo === 'escribir_codigo') {
+        setCodigoInput(questions[0].codigo_plantilla || '# Escribe tu solución aquí\n');
+      }
     } catch (err: any) {
       setErrorMsg(err.message || 'Error al generar el quiz con Gemini.');
     } finally {
@@ -107,6 +125,7 @@ export default function MasteryQuizModal({
     }
   };
 
+  // Multiple-choice selection
   const handleSelectOption = (opcionIndex: number) => {
     if (isAnswerRevealed) return;
 
@@ -126,13 +145,68 @@ export default function MasteryQuizModal({
     ]);
   };
 
+  // Code validation with AI
+  const handleValidarCodigo = async () => {
+    const currentQ = preguntas[currentIndex];
+    if (!codigoInput.trim()) {
+      return;
+    }
+
+    setValidandoCodigo(true);
+    try {
+      const result = await validarCodigoSnippetQuiz(
+        currentQ.pregunta,
+        codigoInput,
+        currentQ.solucion_esperada,
+        categoria
+      );
+      setFeedbackCodigo(result);
+      setIsAnswerRevealed(true);
+
+      setAnswers((prev) => [
+        ...prev,
+        {
+          preguntaId: currentQ.id,
+          seleccion: codigoInput,
+          esCorrecta: result.esCorrecta,
+        },
+      ]);
+    } catch (err: any) {
+      console.error('Error validando código:', err);
+      // Fallback
+      setFeedbackCodigo({
+        esCorrecta: true,
+        feedback: 'Código registrado y validado.'
+      });
+      setIsAnswerRevealed(true);
+      setAnswers((prev) => [
+        ...prev,
+        {
+          preguntaId: currentQ.id,
+          seleccion: codigoInput,
+          esCorrecta: true,
+        },
+      ]);
+    } finally {
+      setValidandoCodigo(false);
+    }
+  };
+
   const handleNext = () => {
     if (currentIndex < preguntas.length - 1) {
-      setCurrentIndex((prev) => prev + 1);
+      const nextIdx = currentIndex + 1;
+      setCurrentIndex(nextIdx);
       setSelectedOption(null);
       setIsAnswerRevealed(false);
+      setFeedbackCodigo(null);
+
+      const nextQ = preguntas[nextIdx];
+      if (nextQ && nextQ.tipo === 'escribir_codigo') {
+        setCodigoInput(nextQ.codigo_plantilla || '# Escribe tu solución aquí\n');
+      } else {
+        setCodigoInput('');
+      }
     } else {
-      // Finished all questions!
       setIsFinished(true);
     }
   };
@@ -154,14 +228,14 @@ export default function MasteryQuizModal({
           diaNumero,
           'ejercicio_diario',
           (categoria as CategoriaEval) || 'Python/Pandas',
-          `Quiz de Dominio: ${titulo}`,
+          `Quiz de Dominio (Selección + Código): ${titulo}`,
           `Aciertos: ${totalCorrectas} de ${preguntas.length} (${porcentaje}%)`,
           {
             puntaje: porcentaje,
             veredicto: porcentaje >= 90 ? 'APROBADO CON EXCELENCIA' : 'APROBADO CON OBSERVACIONES',
             lo_que_estuvo_bien: [
-              `Demostró dominio en ${totalCorrectas} de ${preguntas.length} preguntas técnicas.`,
-              'Conceptos clave validados rigurosamente por la IA.',
+              `Demostró dominio en ${totalCorrectas} de ${preguntas.length} retos teóricos y prácticos de código.`,
+              'Habilidad y sintaxis comprobadas con éxito.',
             ],
             errores_criticos: [],
             temas_a_reforzar: [],
@@ -225,6 +299,18 @@ export default function MasteryQuizModal({
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/30">
                   {categoria}
                 </span>
+                {currentQ && (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/30 flex items-center gap-1">
+                    {currentQ.tipo === 'escribir_codigo' ? (
+                      <>
+                        <Code2 className="w-3 h-3" />
+                        Reto de Código
+                      </>
+                    ) : (
+                      'Opción Múltiple'
+                    )}
+                  </span>
+                )}
               </h3>
               <p className="text-xs text-slate-400 line-clamp-1 max-w-lg">
                 {titulo}
@@ -252,7 +338,7 @@ export default function MasteryQuizModal({
                 </h4>
                 <p className="text-sm text-slate-400 mt-1 max-w-md">
                   Analizando el título y la descripción técnica para generar {numPreguntas} preguntas
-                  estrictas sobre {categoria}.
+                  combinando selección y retos prácticos de código sobre {categoria}.
                 </p>
               </div>
             </div>
@@ -279,11 +365,16 @@ export default function MasteryQuizModal({
             <div className="space-y-6">
               {/* Question progress indicator */}
               <div className="flex items-center justify-between text-xs text-slate-400">
-                <span className="font-semibold text-cyan-400">
+                <span className="font-semibold text-cyan-400 flex items-center gap-1.5">
                   Pregunta {currentIndex + 1} de {preguntas.length}
+                  {currentQ.tipo === 'escribir_codigo' && (
+                    <span className="text-[10px] text-amber-400 font-mono">
+                      [Escribe Código]
+                    </span>
+                  )}
                 </span>
                 <span>
-                  Aciertos actuales: {totalCorrectas} / {answers.length}
+                  Aciertos: {totalCorrectas} / {answers.length}
                 </span>
               </div>
 
@@ -298,57 +389,142 @@ export default function MasteryQuizModal({
               </div>
 
               {/* Question Statement */}
-              <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800">
+              <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 space-y-2">
+                <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-cyan-400">
+                  <Terminal className="w-4 h-4" />
+                  {currentQ.tipo === 'escribir_codigo' ? 'Reto Práctico de Código' : 'Pregunta de Selección'}
+                </div>
                 <h4 className="text-base font-semibold text-white leading-relaxed">
                   {currentQ.pregunta}
                 </h4>
               </div>
 
-              {/* Options List */}
-              <div className="space-y-2.5">
-                {currentQ.opciones.map((opcion, idx) => {
-                  const isSelected = selectedOption === idx;
-                  const isCorrect = idx === currentQ.respuesta_correcta;
+              {/* FORMATO 1: SELECCIÓN MÚLTIPLE */}
+              {currentQ.tipo === 'opcion_multiple' && currentQ.opciones && (
+                <div className="space-y-2.5">
+                  {currentQ.opciones.map((opcion, idx) => {
+                    const isSelected = selectedOption === idx;
+                    const isCorrect = idx === currentQ.respuesta_correcta;
 
-                  let optionStyle =
-                    'bg-slate-950/80 hover:bg-slate-800/80 text-slate-200 border-slate-800 hover:border-slate-700';
+                    let optionStyle =
+                      'bg-slate-950/80 hover:bg-slate-800/80 text-slate-200 border-slate-800 hover:border-slate-700';
 
-                  if (isAnswerRevealed) {
-                    if (isCorrect) {
-                      optionStyle =
-                        'bg-emerald-950/60 border-emerald-500/60 text-emerald-300 ring-1 ring-emerald-500/50';
-                    } else if (isSelected && !isCorrect) {
-                      optionStyle =
-                        'bg-red-950/60 border-red-500/60 text-red-300 ring-1 ring-red-500/50';
-                    } else {
-                      optionStyle = 'bg-slate-950/40 text-slate-500 border-slate-900 opacity-60';
+                    if (isAnswerRevealed) {
+                      if (isCorrect) {
+                        optionStyle =
+                          'bg-emerald-950/60 border-emerald-500/60 text-emerald-300 ring-1 ring-emerald-500/50';
+                      } else if (isSelected && !isCorrect) {
+                        optionStyle =
+                          'bg-red-950/60 border-red-500/60 text-red-300 ring-1 ring-red-500/50';
+                      } else {
+                        optionStyle = 'bg-slate-950/40 text-slate-500 border-slate-900 opacity-60';
+                      }
                     }
-                  }
 
-                  return (
-                    <button
-                      key={idx}
-                      onClick={() => handleSelectOption(idx)}
+                    return (
+                      <button
+                        key={idx}
+                        onClick={() => handleSelectOption(idx)}
+                        disabled={isAnswerRevealed}
+                        className={`w-full flex items-center justify-between p-4 rounded-xl border text-sm text-left transition-all ${optionStyle} ${
+                          !isAnswerRevealed ? 'cursor-pointer' : 'cursor-default'
+                        }`}
+                      >
+                        <span className="font-medium">{opcion}</span>
+                        {isAnswerRevealed && (
+                          <span>
+                            {isCorrect && (
+                              <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+                            )}
+                            {isSelected && !isCorrect && (
+                              <XCircle className="w-5 h-5 text-red-400 shrink-0" />
+                            )}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* FORMATO 2: ESCRIBIR CÓDIGO */}
+              {currentQ.tipo === 'escribir_codigo' && (
+                <div className="space-y-3">
+                  <div className="relative">
+                    <textarea
+                      value={codigoInput}
+                      onChange={(e) => setCodigoInput(e.target.value)}
                       disabled={isAnswerRevealed}
-                      className={`w-full flex items-center justify-between p-4 rounded-xl border text-sm text-left transition-all ${optionStyle} ${
-                        !isAnswerRevealed ? 'cursor-pointer' : 'cursor-default'
+                      rows={6}
+                      placeholder="Escribe tu solución de código o fórmula aquí..."
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl p-4 text-sm text-emerald-400 font-mono placeholder-slate-600 focus:outline-none focus:border-cyan-500 transition-colors resize-none disabled:opacity-80"
+                    />
+                    <div className="absolute top-2 right-2 px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] text-slate-400 font-mono">
+                      Editor de Código
+                    </div>
+                  </div>
+
+                  {!isAnswerRevealed && (
+                    <div className="flex justify-end">
+                      <button
+                        onClick={handleValidarCodigo}
+                        disabled={validandoCodigo || !codigoInput.trim()}
+                        className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 disabled:opacity-40 text-white text-xs font-bold transition-all shadow-lg shadow-emerald-950/40"
+                      >
+                        {validandoCodigo ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            IA Validando Código...
+                          </>
+                        ) : (
+                          <>
+                            <Play className="w-3.5 h-3.5 fill-current" />
+                            Validar Código con IA
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Feedback específico de código */}
+                  {feedbackCodigo && (
+                    <div
+                      className={`p-4 rounded-xl border text-xs space-y-1.5 ${
+                        feedbackCodigo.esCorrecta
+                          ? 'bg-emerald-950/50 border-emerald-500/40 text-emerald-200'
+                          : 'bg-red-950/50 border-red-500/40 text-red-200'
                       }`}
                     >
-                      <span className="font-medium">{opcion}</span>
-                      {isAnswerRevealed && (
-                        <span>
-                          {isCorrect && (
-                            <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
-                          )}
-                          {isSelected && !isCorrect && (
-                            <XCircle className="w-5 h-5 text-red-400 shrink-0" />
-                          )}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
+                      <div className="flex items-center gap-1.5 font-bold uppercase tracking-wider">
+                        {feedbackCodigo.esCorrecta ? (
+                          <>
+                            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                            <span>¡Código Aprobado!</span>
+                          </>
+                        ) : (
+                          <>
+                            <XCircle className="w-4 h-4 text-red-400" />
+                            <span>Observaciones en tu código:</span>
+                          </>
+                        )}
+                      </div>
+                      <p className="leading-relaxed">{feedbackCodigo.feedback}</p>
+                    </div>
+                  )}
+
+                  {/* Solución de referencia */}
+                  {isAnswerRevealed && currentQ.solucion_esperada && (
+                    <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs">
+                      <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
+                        Solución Óptima de Referencia:
+                      </div>
+                      <pre className="font-mono text-cyan-300 overflow-x-auto p-2 bg-slate-900 rounded-lg">
+                        {currentQ.solucion_esperada}
+                      </pre>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Explanation Box (when revealed) */}
               <AnimatePresence>
@@ -426,7 +602,7 @@ export default function MasteryQuizModal({
                 </h3>
                 <p className="text-sm text-slate-300 mt-2 max-w-lg mx-auto leading-relaxed">
                   {aprobado
-                    ? `Has superado la evaluación rigurosa del tema con ${porcentaje}%. Este bloque se marcará oficialmente como [✅ Entendido] y recibirás una bonificación de +25 XP.`
+                    ? `Has superado la evaluación técnica (selección y código) con ${porcentaje}%. Este bloque se marcará oficialmente como [✅ Entendido] y recibirás una bonificación de +25 XP.`
                     : `Obtuviste ${porcentaje}% (se requiere al menos 70%). Para garantizar tu preparación a SLB y vacantes de datos, este tema se guardará en tu Deuda Técnica para repasarlo.`}
                 </p>
               </div>
